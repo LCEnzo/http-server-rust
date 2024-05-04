@@ -5,59 +5,70 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
-fn return_empty_http_response(stream: &mut TcpStream, code: u32, phrase: &[u8]) {
-    let status_line = [b"HTTP/1.1 ", code.to_string().as_bytes(), b" ", phrase].concat();
-    let headers = b"Content-Length: 0\r\nConnection: close\r\n";
-    let message_body = b"";
+mod types;
 
-    let buf: [&[u8]; 5] = [
-        status_line.as_slice(),
-        b"\r\n",
-        headers,
-        b"\r\n",
-        message_body,
-    ];
-    let buf = buf.concat();
+use types::{HttpMethod, HttpRequest, HttpResponse};
 
-    if let Err(err) = stream.write_all(buf.as_slice()) {
-        eprintln!("return_empty_404 failed due to {err}");
+fn return_http_response(stream: &mut TcpStream, resp: &HttpResponse) {
+    if let Err(err) = stream.write_all(resp.to_byte_string().as_slice()) {
+        eprintln!("return_empty_http_response failed due to {err}");
         return;
     }
 
     if let Err(err) = stream.flush() {
-        eprintln!("TCP stream flush failed in return_empty_404: {err}");
+        eprintln!("TCP stream flush failed in return_empty_http_response: {err}");
     }
+}
+
+fn return_empty_http_response(stream: &mut TcpStream, status_code: u16, phrase: Vec<u8>) {
+    let resp = HttpResponse {
+        status_code,
+        phrase,
+        headers: vec![b"Content-Length: 0".to_vec(), b"Connection: close".to_vec()],
+        body: vec![],
+    };
+    return_http_response(stream, &resp)
 }
 
 fn return_path_http_response(stream: &mut TcpStream, path: &mut String) {
     if !path.starts_with("/echo/") {
-        return_empty_http_response(stream, 400, b"Bad Request");
+        return_empty_http_response(stream, 400, b"Bad Request".to_vec());
         return;
     }
 
     let path = path.split_off(6);
     let len = path.len();
 
-    let status_line = b"HTTP/1.1 200 OK".as_slice();
-    let headers = [
-        b"Content-Length: ",
-        len.to_string().as_bytes(),
-        b"\r\nConnection: close\r\nContent-Type: text/plain\r\n",
-    ]
-    .concat();
-    let headers = headers.as_slice();
-    let message_body = path.as_bytes();
+    let resp = HttpResponse {
+        status_code: 200,
+        phrase: b"OK".to_vec(),
+        headers: vec![
+            [b"Content-Length: ", len.to_string().as_bytes()].concat(),
+            b"Connection: close".to_vec(),
+            b"Content-Type: text/plain".to_vec(),
+        ],
+        body: path.as_bytes().to_vec(),
+    };
+    return_http_response(stream, &resp)
+}
 
-    let buf = [status_line, b"\r\n", headers, b"\r\n", message_body].concat();
-
-    if let Err(err) = stream.write_all(buf.as_slice()) {
-        eprintln!("return_empty_404 failed due to {err}");
-        return;
-    }
-
-    if let Err(err) = stream.flush() {
-        eprintln!("TCP stream flush failed in return_empty_404: {err}");
-    }
+fn return_user_agent_response(stream: &mut TcpStream, req: &HttpRequest) {
+    let user_agent = req
+        .headers
+        .get("User-Agent")
+        .cloned()
+        .unwrap_or_else(String::new);
+    let resp = HttpResponse {
+        status_code: 200,
+        phrase: b"OK".to_vec(),
+        headers: vec![
+            [b"Content-Length: ", user_agent.len().to_string().as_bytes()].concat(),
+            b"Connection: close".to_vec(),
+            b"Content-Type: text/plain".to_vec(),
+        ],
+        body: user_agent.into_bytes().to_vec(),
+    };
+    return_http_response(stream, &resp)
 }
 
 fn respond_via_http(stream: &mut TcpStream) {
@@ -68,31 +79,32 @@ fn respond_via_http(stream: &mut TcpStream) {
     }
 
     let buf = String::from_utf8_lossy(&buf);
+    let request = HttpRequest::from_str(&buf);
+    if let Err(err) = request {
+        eprintln!("err: {err}");
+        eprintln!("Expected to successfully parse request into a HttpRequest struct");
+        return_empty_http_response(stream, 400, b"Bad Request".to_vec());
+        return;
+    }
+    let request = request.unwrap();
 
-    let path = buf
-        .lines()
-        .next()
-        .and_then(|start_line| start_line.split_whitespace().nth(1))
-        .unwrap_or_else(|| {
-            eprintln!("Unable to parse path from TCP stream, defaulting to /");
-            "/"
-        })
-        .trim();
-    let mut path: String =
-        String::from_str(path).expect("Expected to be able to convert path from &str to String");
-
-    match path.as_str() {
-        "/" => return_empty_http_response(stream, 200, b"OK"),
-        _ if path.starts_with("/echo/") => return_path_http_response(stream, &mut path),
-        _ => return_empty_http_response(stream, 404, b"Not Found"),
+    match request.path.as_str() {
+        "/" => return_empty_http_response(stream, 200, b"OK".to_vec()),
+        "/user-agent" if request.method == HttpMethod::Get => {
+            return_user_agent_response(stream, &request)
+        }
+        _ if request.path.starts_with("/echo/") => {
+            return_path_http_response(stream, &mut request.path.clone())
+        }
+        _ => return_empty_http_response(stream, 404, b"Not Found".to_vec()),
     }
 }
 
 fn main() {
-    println!("Test print for logging.");
-
     let listener = TcpListener::bind("127.0.0.1:4221")
         .expect("Expected to be able to bind TCP listener to port 4221");
+
+    println!("TcpListener has bound 4221.");
 
     for stream in listener.incoming() {
         match stream {
