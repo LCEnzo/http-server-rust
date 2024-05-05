@@ -44,6 +44,26 @@ async fn return_http_response_with_text(
     return_http_response(stream, &resp).await
 }
 
+async fn return_http_response_with_data(
+    stream: &mut TcpStream,
+    status_code: u16,
+    phrase: Vec<u8>,
+    msg: Vec<u8>,
+) {
+    let headers = vec![
+        [b"Content-Length: ", msg.len().to_string().as_bytes()].concat(),
+        b"Connection: close".to_vec(),
+        b"Content-Type: application/octet-stream".to_vec(),
+    ];
+    let resp = HttpResponse {
+        status_code,
+        phrase,
+        headers,
+        body: msg,
+    };
+    return_http_response(stream, &resp).await
+}
+
 async fn return_empty_http_response(stream: &mut TcpStream, status_code: u16, phrase: Vec<u8>) {
     let resp = HttpResponse {
         status_code,
@@ -100,7 +120,7 @@ async fn get_file(stream: &mut TcpStream, req: &HttpRequest) {
 
     let read = fs::read(path.clone()).await;
     match read {
-        Ok(content) => return_http_response_with_text(stream, 200, b"OK".to_vec(), content).await,
+        Ok(content) => return_http_response_with_data(stream, 200, b"OK".to_vec(), content).await,
         Err(err) => {
             if err.kind() == ErrorKind::NotFound {
                 return_http_response_with_text(
@@ -141,7 +161,7 @@ async fn post_file(stream: &mut TcpStream, req: &HttpRequest) {
     let written = fs::write(path.clone(), &req.body).await;
     match written {
         Ok(_) => {
-            return_http_response_with_text(stream, 201, b"Created".to_vec(), b"".to_vec()).await
+            return_http_response_with_data(stream, 201, b"Created".to_vec(), b"".to_vec()).await
         }
         Err(err) => {
             if err.kind() == ErrorKind::NotFound {
