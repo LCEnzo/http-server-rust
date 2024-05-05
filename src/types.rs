@@ -135,6 +135,9 @@ impl FromStr for HttpRequest {
         let blc = body_lines.concat();
         let body = blc.as_bytes();
 
+        // eprintln!("body: |{}|", blc);
+        // eprintln!("body len: |{}|", blc.len());
+
         Ok(HttpRequest {
             method,
             path,
